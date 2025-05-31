@@ -1,54 +1,80 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, Button
+import matplotlib.gridspec as gridspec
 
 
 class MarketSimulator:
-    def __init__(self):
+    def __init__(self, demand_elasticity=-3.0, supply_elasticity=3.0):
         # Market parameters
         self.base_demand = 100  # Base demand quantity
         self.base_supply = 100  # Base supply quantity
-        self.demand_elasticity = -3.0  # Demand elasticity
-        self.supply_elasticity = 3.0  # Supply elasticity
+        self.demand_elasticity = demand_elasticity  # Demand elasticity
+        self.supply_elasticity = supply_elasticity  # Supply elasticity
         self.tax_rate = 0.0  # Initial tax rate
-        self.equilibrium_price = 10.0  # Initial equilibrium price
-        self.equilibrium_quantity = 100  # Initial equilibrium quantity
         self.history = []  # History records
 
+        # Calculate initial curves and equilibrium
+        self.update_curves()
+
+    def update_curves(self):
+        """Update curves when elasticity or tax changes"""
         # Calculate demand curve intercept (maximum willingness to pay)
-        self.demand_intercept = self.equilibrium_price - self.base_demand / self.demand_elasticity
+        # Using equilibrium condition at base point (P=10, Q=100)
+        self.demand_intercept = 10 - 100 / self.demand_elasticity
 
         # Calculate supply curve intercept (minimum acceptable price)
-        self.supply_intercept = self.equilibrium_price - self.base_supply / self.supply_elasticity
+        self.supply_intercept = 10 - 100 / self.supply_elasticity
+
+        # Find current equilibrium
+        self.find_equilibrium()
 
     def demand_function(self, price):
         """Demand function calculation"""
-        return self.base_demand + self.demand_elasticity * (price - self.equilibrium_price)
+        return self.demand_elasticity * (price - self.demand_intercept)
 
     def supply_function(self, price):
         """Supply function calculation"""
-        return self.base_supply + self.supply_elasticity * (price - self.equilibrium_price)
+        return self.supply_elasticity * (price - self.supply_intercept)
+
+    def taxed_supply_function(self, price):
+        """Taxed supply function calculation"""
+        # Price received by producers is consumer price minus tax
+        producer_price = price - self.tax_rate
+        return self.supply_elasticity * (producer_price - self.supply_intercept)
 
     def find_equilibrium(self):
-        """Find market equilibrium point using analytical solution"""
-        # Analytical solution for equilibrium
-        # P = 10 + 0.5 * tax_rate (as derived from linear equations)
-        price = self.equilibrium_price + 0.5 * self.tax_rate
+        """Find market equilibrium point"""
+        # Find where demand equals taxed supply
+        # Solve: demand_elasticity * (P - demand_intercept) = supply_elasticity * ((P - tax_rate) - supply_intercept)
 
-        # Quantity = 100 - 1.5 * tax_rate
-        quantity = self.equilibrium_quantity - 1.5 * self.tax_rate
+        # Analytical solution
+        numerator = (self.supply_elasticity * (self.tax_rate + self.supply_intercept)
+                     - self.demand_elasticity * self.demand_intercept)
+        denominator = self.supply_elasticity - self.demand_elasticity
 
-        return price, quantity
+        # Calculate equilibrium price and quantity
+        self.equilibrium_price = numerator / denominator
+        self.equilibrium_quantity = self.demand_function(self.equilibrium_price)
 
-    def calculate_welfare(self, consumer_price, producer_price, quantity):
-        """Calculate social welfare ensuring CS=PS when |elasticity| equal"""
-        # 1. Consumer surplus
+        # Ensure non-negative quantity
+        self.equilibrium_quantity = max(0, self.equilibrium_quantity)
+
+        return self.equilibrium_price, self.equilibrium_quantity
+
+    def calculate_welfare(self):
+        """Calculate social welfare"""
+        # Consumer price is equilibrium price
+        consumer_price = self.equilibrium_price
+        # Producer price is consumer price minus tax
+        producer_price = consumer_price - self.tax_rate
+        quantity = self.equilibrium_quantity
+
+        # 1. Consumer surplus (triangle under demand curve and above price)
         consumer_surplus = 0.5 * (self.demand_intercept - consumer_price) * quantity
 
-        # 2. Producer surplus - ensure symmetry with consumer surplus
-        # Since |demand_elasticity| = |supply_elasticity|, PS should equal CS
-        # We calculate it symmetrically to guarantee equality
-        producer_surplus = 0.5 * (consumer_price - self.tax_rate - self.supply_intercept) * quantity
+        # 2. Producer surplus (triangle above supply curve and below price)
+        producer_surplus = 0.5 * (producer_price - self.supply_intercept) * quantity
 
         # 3. Tax revenue
         tax_revenue = self.tax_rate * quantity
@@ -56,226 +82,314 @@ class MarketSimulator:
         # 4. Total welfare
         total_welfare = consumer_surplus + producer_surplus + tax_revenue
 
-        # 5. Deadweight loss - calculated as difference from zero-tax welfare
-        # Get zero-tax welfare
-        zero_tax_price, zero_tax_quantity = self.find_zero_tax_equilibrium()
+        # 5. Deadweight loss - difference from zero-tax welfare
+        # Calculate zero-tax welfare
+        original_tax = self.tax_rate
+        self.tax_rate = 0
+        zero_tax_price, zero_tax_quantity = self.find_equilibrium()
         zero_tax_cs = 0.5 * (self.demand_intercept - zero_tax_price) * zero_tax_quantity
         zero_tax_ps = 0.5 * (zero_tax_price - self.supply_intercept) * zero_tax_quantity
         zero_tax_total = zero_tax_cs + zero_tax_ps
 
-        # Deadweight loss = zero-tax welfare - current total welfare
+        # Restore actual tax rate
+        self.tax_rate = original_tax
+
         deadweight_loss = max(0, zero_tax_total - total_welfare)
 
         return consumer_surplus, producer_surplus, tax_revenue, total_welfare, deadweight_loss
 
-    def find_zero_tax_equilibrium(self):
-        """Find equilibrium with zero tax"""
-        # Save current tax rate
-        original_tax = self.tax_rate
-        # Set tax rate to 0
-        self.tax_rate = 0
-        # Calculate equilibrium
-        price, quantity = self.find_equilibrium()
-        # Restore original tax rate
-        self.tax_rate = original_tax
-        return price, quantity
-
 
 def create_interactive_game():
-    """Create interactive game interface"""
+    """Create interactive game interface with adjustable elasticities"""
     # Initialize simulator
     sim = MarketSimulator()
 
-    # Create figure
-    fig = plt.figure(figsize=(10, 8))
-    fig.suptitle("Tax Welfare Analysis Game", fontsize=16, fontweight='bold')
+    # Create figure with custom grid layout
+    fig = plt.figure(figsize=(12, 8))
+    fig.suptitle("Tax Welfare Analysis", fontsize=16, fontweight='bold', y=0.98)  # 提高主标题位置
 
-    # Create two subplots (vertical arrangement)
-    ax = plt.subplot(2, 1, 1)  # Top: Supply and demand curves
-    ax2 = plt.subplot(2, 1, 2)  # Bottom: Welfare analysis
+    # Use GridSpec for better layout control
+    gs = gridspec.GridSpec(2, 2, height_ratios=[3, 1], width_ratios=[3, 1])
 
-    # Adjust layout
-    plt.subplots_adjust(left=0.1, right=0.9, bottom=0.22, top=0.9, hspace=0.4)
+    # Create axes
+    ax = plt.subplot(gs[0, 0])  # Supply and demand curves (main plot)
+    ax2 = plt.subplot(gs[1, 0])  # Welfare analysis (bottom left)
+    ax_controls = plt.subplot(gs[0:2, 1])  # Controls panel (right column)
+    ax_controls.set_axis_off()  # We'll create our own axes for controls
 
-    # Create price range
-    prices = np.linspace(0, 50, 200)  # Extended price range
+    # Adjust layout with more space at the top
+    plt.subplots_adjust(left=0.08, right=0.92, bottom=0.1, top=0.92,
+                        hspace=0.3, wspace=0.3)
 
-    # Calculate and plot demand curve
-    demand = [sim.demand_function(p) for p in prices]
-    demand_line, = ax.plot(prices, demand, 'b-', label='Demand Curve', linewidth=2.5)
+    # Create quantity range (x-axis)
+    quantities = np.linspace(0, 200, 200)  # Reasonable quantity range
+
+    # Calculate and plot demand curve (price as function of quantity)
+    demand_prices = [q / sim.demand_elasticity + sim.demand_intercept for q in quantities]
+    demand_line, = ax.plot(quantities, demand_prices, 'b-', linewidth=2.0)
 
     # Calculate and plot supply curve
-    supply = [sim.supply_function(p) for p in prices]
-    supply_line, = ax.plot(prices, supply, 'r-', label='Supply Curve', linewidth=2.5)
+    supply_prices = [q / sim.supply_elasticity + sim.supply_intercept for q in quantities]
+    supply_line, = ax.plot(quantities, supply_prices, 'r-', linewidth=2.0)
 
-    # Plot intercept points for reference
-    ax.axhline(y=0, color='k', linestyle='--', alpha=0.3)
-    ax.axvline(x=sim.demand_intercept, color='b', linestyle=':', alpha=0.5,
-               label=f'Max Willingness: {sim.demand_intercept:.1f}')
-    ax.axvline(x=sim.supply_intercept, color='r', linestyle=':', alpha=0.5,
-               label=f'Min Acceptable: {sim.supply_intercept:.1f}')
-
-    # Calculate initial equilibrium
+    # Find initial equilibrium
     consumer_price, quantity = sim.find_equilibrium()
-    producer_price = consumer_price - sim.tax_rate
 
-    # Calculate welfare
-    welfare_data = sim.calculate_welfare(consumer_price, producer_price, quantity)
+    # Plot equilibrium point with a label
+    eq_point, = ax.plot(quantity, consumer_price, 'go', markersize=10,
+                        markerfacecolor='gold', markeredgecolor='black', zorder=10)
 
-    # Plot equilibrium point
-    eq_point, = ax.plot(consumer_price, quantity, 'go', markersize=10,
-                        markerfacecolor='gold', markeredgecolor='black',
-                        label='Equilibrium')
+    # 平衡点标签 - 美化版本
+    eq_label = ax.annotate(
+        f'Price: {consumer_price:.2f}\nQuantity: {quantity:.2f}',
+        xy=(quantity, consumer_price),
+        xytext=(quantity, consumer_price + 2.5),  # 在点上方的固定位置
+        textcoords='data',
+        ha='center',
+        va='bottom',
+        fontsize=10,
+        bbox=dict(
+            boxstyle='round,pad=0.5',
+            fc='#FFF8DC',  # 浅米色背景
+            ec='#DAA520',  # 金色边框
+            lw=1.5,
+            alpha=0.95
+        )
+    )
 
-    # Add concise equilibrium point label
-    eq_label = ax.text(consumer_price + 0.5, quantity + 10,
-                       f"P={consumer_price:.2f}, Q={quantity:.2f}",
-                       fontsize=10, bbox=dict(facecolor='white', alpha=0.9))
+    # Create taxed supply curve (always visible in legend)
+    taxed_supply_prices = [q / sim.supply_elasticity + sim.supply_intercept + sim.tax_rate for q in quantities]
+    supply_tax_line, = ax.plot(quantities, taxed_supply_prices, 'r--', linewidth=1.5)
 
-    # If tax exists, plot taxed supply curve
-    if sim.tax_rate > 0:
-        supply_tax = [sim.supply_function(p - sim.tax_rate) for p in prices]
-        supply_tax_line, = ax.plot(prices, supply_tax, 'r--', label='Taxed Supply',
-                                   linewidth=2.0)
-        ax.legend(loc='best', fontsize=9)
+    # Add legend with all elements including taxed supply
+    ax.legend([demand_line, supply_line, supply_tax_line, eq_point],
+              ['Demand', 'Supply', 'Taxed Supply', 'Equilibrium'],
+              loc='upper right', fontsize=9, framealpha=0.9)
+
+    # 图表标题居中显示，有合适间距
+    ax.set_title("Supply and Demand Curves", fontsize=12, pad=10, y=1.0)  # 居中位置
+    ax.title.set_position([0.5, 1.0])  # 确保标题在图表上方居中
 
     # Set chart properties
-    ax.set_title('Supply and Demand Curves', fontsize=14)
-    ax.set_xlabel('Price', fontsize=12)
-    ax.set_ylabel('Quantity', fontsize=12)
-    ax.set_xlim(0, 50)
-    ax.set_ylim(0, 250)
+    ax.set_xlabel('Quantity', fontsize=11)
+    ax.set_ylabel('Price', fontsize=11)
+    ax.set_xlim(0, 200)
+    ax.set_ylim(0, 20)
     ax.grid(True, linestyle='--', alpha=0.7)
 
     # Welfare analysis chart
-    welfare_labels = ['Consumer Surplus', 'Producer Surplus', 'Tax Revenue', 'Total Welfare', 'Deadweight Loss']
+    welfare_labels = ['CS', 'PS', 'Tax', 'Total', 'DWL']
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#9467bd', '#d62728']
+    welfare_data = sim.calculate_welfare()
     welfare_bars = ax2.bar(welfare_labels, welfare_data, color=colors, alpha=0.85)
-    ax2.set_title('Social Welfare Analysis', fontsize=14)
-    ax2.set_ylabel('Value', fontsize=12)
+    ax2.set_ylabel('Value', fontsize=10)
     ax2.grid(True, linestyle='--', alpha=0.7, axis='y')
 
-    # Set welfare labels
-    ax2.tick_params(axis='x', rotation=0)
+    # 福利图表标题居中显示
+    ax2.set_title("Welfare Analysis", fontsize=12, pad=10, y=1.0)  # 居中位置
+    ax2.title.set_position([0.5, 1.0])  # 确保标题在图表上方居中
 
-    # Add tax rate slider (range 0-10)
-    tax_ax = plt.axes([0.25, 0.14, 0.55, 0.03])
+    # 美化右侧控制面板
+    # 添加控制面板标题 - 位置调整
+    control_title = plt.figtext(0.85, 0.88, "Market Parameters",
+                                fontsize=12, fontweight='bold', ha='center')
+
+    # Add control sliders in the right panel with improved styling
+    # Create axes for controls with relative positioning
+    tax_ax = fig.add_axes([0.75, 0.85, 0.2, 0.03])
     tax_slider = Slider(
         ax=tax_ax, label='Tax Rate',
         valmin=0, valmax=10, valinit=sim.tax_rate,
-        valstep=0.1, color='#2ca02c'
+        valstep=0.1, color='#2ca02c',
+        track_color='#e0f2e0',  # 浅绿色轨道
+    )
+    tax_ax.set_facecolor('#f8f8f8')  # 设置背景色
+
+    # Add elasticity controls
+    demand_ax = fig.add_axes([0.75, 0.80, 0.2, 0.03])
+    demand_elasticity_slider = Slider(
+        ax=demand_ax, label='Demand Elasticity',
+        valmin=-5.0, valmax=-0.5, valinit=sim.demand_elasticity,
+        valstep=0.1, color='#1f77b4',
+        track_color='#e0e8f0'  # 浅蓝色轨道
+    )
+    demand_ax.set_facecolor('#f8f8f8')  # 设置背景色
+
+    supply_ax = fig.add_axes([0.75, 0.75, 0.2, 0.03])
+    supply_elasticity_slider = Slider(
+        ax=supply_ax, label='Supply Elasticity',
+        valmin=0.5, valmax=5.0, valinit=sim.supply_elasticity,
+        valstep=0.1, color='#ff7f0e',
+        track_color='#f8e8d0'  # 浅橙色轨道
+    )
+    supply_ax.set_facecolor('#f8f8f8')  # 设置背景色
+
+    # 添加重置按钮 - 使用更美观的样式
+    reset_ax = fig.add_axes([0.75, 0.70, 0.2, 0.05])
+    reset_button = Button(reset_ax, 'Reset Market', color='#1f77b4', hovercolor='#4a90d9')
+    reset_ax.set_facecolor('#f8f8f8')  # 设置背景色
+
+    # 美化福利指标表格
+    # 创建福利指标表格 - 添加标题和边框
+    table_ax = fig.add_axes([0.75, 0.05, 0.2, 0.55])
+    table_ax.set_axis_off()
+
+    # 添加表格标题 - 位置调整
+    table_title = plt.figtext(0.85, 0.60, "Welfare Metrics",
+                              fontsize=12, fontweight='bold', ha='center')
+
+    # 初始化表格数据
+    welfare_metrics = [
+        ("Equilibrium Price", f"{consumer_price:.2f}"),
+        ("Equilibrium Quantity", f"{quantity:.2f}"),
+        ("Consumer Surplus", f"{welfare_data[0]:.2f}"),
+        ("Producer Surplus", f"{welfare_data[1]:.2f}"),
+        ("Tax Revenue", f"{welfare_data[2]:.2f}"),
+        ("Total Welfare", f"{welfare_data[3]:.2f}"),
+        ("Deadweight Loss", f"{welfare_data[4]:.2f}")
+    ]
+
+    # 创建表格 - 使用更大的边界框和边框
+    table = table_ax.table(
+        cellText=welfare_metrics,
+        colLabels=["Metric", "Value"],
+        cellLoc='center',
+        loc='center',
+        bbox=[0.1, 0.1, 0.85, 0.85],
+        edges='closed'  # 添加表格边框
     )
 
-    # Add reset button
-    reset_ax = plt.axes([0.4, 0.06, 0.2, 0.03])
-    reset_button = Button(reset_ax, 'Reset Market', color='#1f77b4')
+    # 表格样式优化以适应内容
+    table.auto_set_font_size(False)
+    table.set_fontsize(10)  # 使用稍大的字体
+    table.auto_set_column_width([0, 1])  # 自动调整列宽
 
-    # Add status panel
-    status_box = plt.axes([0.15, 0.01, 0.7, 0.05])
-    status_box.set_axis_off()
-    status_text = status_box.text(0.5, 0.5, '', fontsize=10,
-                                  ha='center', va='center',
-                                  bbox=dict(facecolor='#f7f7f7', alpha=0.9))
+    # 设置标题行样式
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:  # 标题行
+            cell.set_facecolor('#4a7b9d')
+            cell.set_text_props(color='white', weight='bold')
+            cell.set_edgecolor('#2a5a7d')  # 更深的边框颜色
+        elif row % 2 == 1:  # 交替行颜色
+            cell.set_facecolor('#f5f5f5')  # 更浅的灰色
+        # 设置所有单元格的边框
+        cell.set_edgecolor('#d0d0d0')
 
-    def update_status():
-        """Update status text"""
-        # Calculate welfare metrics
-        cs, ps, tr, total, dwl = welfare_data
+    # 存储参考线用于更新
+    ref_lines = {
+        'supply_tax_line': supply_tax_line,
+        'table': table,
+        'eq_label': eq_label,
+        'eq_point': eq_point
+    }
 
-        # Get zero-tax welfare for verification
-        sim.tax_rate = 0
-        _, _, _, zero_tax_total, _ = sim.calculate_welfare(*sim.find_equilibrium(), sim.equilibrium_quantity)
-        sim.tax_rate = tax_slider.val
+    def update_elasticity():
+        """更新弹性值并重新计算曲线"""
+        # 更新弹性值
+        sim.demand_elasticity = demand_elasticity_slider.val
+        sim.supply_elasticity = supply_elasticity_slider.val
 
-        # Verification: total welfare + DWL should equal zero-tax welfare
-        verification = total + dwl
-
-        # Create status message
-        status = (
-            f"Price={consumer_price:.2f}, Qty={quantity:.2f} | "
-            f"Tax: {sim.tax_rate:.2f} | "
-            f"CS={cs:.2f}, PS={ps:.2f}, TR={tr:.2f}, Total={total:.2f}, DWL={dwl:.2f}"
-        )
-
-        # Update text object
-        status_text.set_text(status)
+        # 更新曲线
+        sim.update_curves()
 
     def update(val):
-        """Update charts"""
-        nonlocal consumer_price, quantity, producer_price, welfare_data
+        """更新图表"""
+        nonlocal consumer_price, quantity, welfare_data
 
-        # Update tax rate
+        # 更新税率
         sim.tax_rate = tax_slider.val
 
-        # Calculate new equilibrium
+        # 找到新的均衡点
         consumer_price, quantity = sim.find_equilibrium()
-        producer_price = consumer_price - sim.tax_rate
 
-        # Recalculate welfare
-        welfare_data = sim.calculate_welfare(consumer_price, producer_price, quantity)
+        # 重新计算福利
+        welfare_data = sim.calculate_welfare()
 
-        # Update supply and demand curves
-        demand_line.set_ydata([sim.demand_function(p) for p in prices])
-        supply_line.set_ydata([sim.supply_function(p) for p in prices])
+        # 更新供需曲线
+        demand_prices = [q / sim.demand_elasticity + sim.demand_intercept for q in quantities]
+        demand_line.set_ydata(demand_prices)
+        supply_prices = [q / sim.supply_elasticity + sim.supply_intercept for q in quantities]
+        supply_line.set_ydata(supply_prices)
 
-        # Update equilibrium point and label
-        eq_point.set_data([consumer_price], [quantity])
-        eq_label.set_text(f"P={consumer_price:.2f}, Q={quantity:.2f}")
-        eq_label.set_position((consumer_price + 0.5, quantity + 10))
+        # 更新均衡点和标签 - 标签随点一起移动
+        ref_lines['eq_point'].set_data([quantity], [consumer_price])
+        ref_lines['eq_label'].xy = (quantity, consumer_price)
+        ref_lines['eq_label'].set_position((quantity, consumer_price + 2.5))
+        ref_lines['eq_label'].set_text(f'Price: {consumer_price:.2f}\nQuantity: {quantity:.2f}')
 
-        # Clear previous taxed supply curves
-        for line in ax.lines[2:]:
-            if line.get_label() == 'Taxed Supply':
-                line.remove()
+        # 更新含税供给曲线
+        taxed_supply_prices = [q / sim.supply_elasticity + sim.supply_intercept + sim.tax_rate for q in quantities]
+        ref_lines['supply_tax_line'].set_ydata(taxed_supply_prices)
 
-        # Replot taxed supply curve (if tax exists)
-        if sim.tax_rate > 0:
-            supply_tax = [sim.supply_function(p - sim.tax_rate) for p in prices]
-            ax.plot(prices, supply_tax, 'r--', label='Taxed Supply', linewidth=2.0)
-            ax.legend(loc='best', fontsize=9)
-
-        # Update welfare chart
+        # 更新福利图表
         for i, bar in enumerate(welfare_bars):
             bar.set_height(welfare_data[i])
 
-        # Adjust Y-axis range to fit new data
+        # 调整Y轴范围以适应新数据
         max_value = max(welfare_data) * 1.2
         ax2.set_ylim(0, max_value)
 
-        # Update status
-        update_status()
+        # 使用新值更新表格
+        new_metrics = [
+            ("Equilibrium Price", f"{consumer_price:.2f}"),
+            ("Equilibrium Quantity", f"{quantity:.2f}"),
+            ("Consumer Surplus", f"{welfare_data[0]:.2f}"),
+            ("Producer Surplus", f"{welfare_data[1]:.2f}"),
+            ("Tax Revenue", f"{welfare_data[2]:.2f}"),
+            ("Total Welfare", f"{welfare_data[3]:.2f}"),
+            ("Deadweight Loss", f"{welfare_data[4]:.2f}")
+        ]
 
-        # Record history
-        sim.history.append({
-            'tax': sim.tax_rate,
-            'price': consumer_price,
-            'quantity': quantity,
-            'welfare': welfare_data[3]
-        })
+        # 更新表格数据
+        for i, (metric, value) in enumerate(new_metrics):
+            ref_lines['table'].get_celld()[(i + 1, 0)].get_text().set_text(metric)
+            ref_lines['table'].get_celld()[(i + 1, 1)].get_text().set_text(value)
 
         fig.canvas.draw_idle()
 
+    def update_elasticity_and_chart(val):
+        """更新弹性并更新图表"""
+        update_elasticity()
+        update(val)
+
     def reset(event):
-        """Reset market"""
-        nonlocal sim, consumer_price, quantity, producer_price, welfare_data
+        """将市场重置为初始状态"""
+        nonlocal sim, consumer_price, quantity, welfare_data
+
+        # 重置为初始值
         sim = MarketSimulator()
+
+        # 更新滑块
         tax_slider.set_val(0)
+        demand_elasticity_slider.set_val(-3.0)
+        supply_elasticity_slider.set_val(3.0)
+
+        # 获取初始值
         consumer_price, quantity = sim.find_equilibrium()
-        producer_price = consumer_price - sim.tax_rate
-        welfare_data = sim.calculate_welfare(consumer_price, producer_price, quantity)
+        welfare_data = sim.calculate_welfare()
+
+        # 更新图表
         update(None)
         fig.canvas.draw()
 
-    # Set callback functions
+    # 设置回调函数
     tax_slider.on_changed(update)
+    demand_elasticity_slider.on_changed(update_elasticity_and_chart)
+    supply_elasticity_slider.on_changed(update_elasticity_and_chart)
     reset_button.on_clicked(reset)
 
-    # Initial update
-    update_status()
+    # 初始更新
+    update(None)
+
+    # 添加美学改进
+    fig.patch.set_facecolor('#f5f5f5')
+    ax.set_facecolor('#ffffff')
+    ax2.set_facecolor('#ffffff')
+    table_ax.set_facecolor('#f9f9f9')
 
     plt.show()
 
 
-# Run the game
+# 运行游戏
 if __name__ == "__main__":
     create_interactive_game()
